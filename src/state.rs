@@ -231,7 +231,7 @@ impl SyncedBuffer {
     }
 
     fn update_out(&mut self) {
-        self.out = self.doc.text(&self.buffer_id()).unwrap();
+        self.out = self.doc.text(self.buffer_id()).unwrap();
     }
 
     pub(crate) fn doc_save(&mut self) -> Vec<u8> {

@@ -43,7 +43,6 @@ fn main() {
                             .handle_wire_message(m, sender.clone())
                         {
                             eprintln!("failed to handle received wire message data, Err {e:?}");
-                            return;
                         };
                     }
                     AppMessage::AddLogEntry(entry) => state.add_log_entry(entry),
@@ -54,7 +53,6 @@ fn main() {
                             state.add_log_entry(format!(
                                 "failed to send `RequestMerge` message after a peer was added, Err: {e:?}"
                             ));
-                            return;
                         }
                     }
                     AppMessage::PeerRemoved((_, _)) => {
