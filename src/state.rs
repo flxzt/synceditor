@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use automerge::transaction::{CommitOptions, Transactable};
-use automerge::{Automerge, AutomergeError, ObjId, ROOT};
+use automerge::{Automerge, AutomergeError, ObjId, ReadDoc, ROOT};
 use druid::text::EditableText;
 use druid::widget::Controller;
 use druid::{
