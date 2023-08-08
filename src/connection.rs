@@ -2,13 +2,11 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
-use futures::channel::mpsc::UnboundedReceiver;
+use crate::state::AppState;
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::StreamExt;
-use libp2p::gossipsub::{
-    self, Gossipsub, GossipsubEvent, GossipsubMessage, IdentTopic, MessageAuthenticity, MessageId,
-    Topic, ValidationMode,
-};
-use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
+use libp2p::gossipsub::{self, IdentTopic, MessageAuthenticity, MessageId, Topic, ValidationMode};
+use libp2p::swarm::{NetworkBehaviour, SwarmBuilder, SwarmEvent};
 use libp2p::{identity, mdns, Multiaddr, PeerId, Swarm};
 
 #[derive(Debug, Clone)]
@@ -41,7 +39,7 @@ pub(crate) enum WireMessage {
 // We create a custom network behaviour that combines Gossipsub and Mdns.
 #[derive(NetworkBehaviour)]
 struct MyBehaviour {
-    gossipsub: Gossipsub,
+    gossipsub: gossipsub::Behaviour,
     mdns: mdns::async_io::Behaviour,
 }
 
@@ -56,52 +54,34 @@ impl ConnectionState {
     where
         L: Fn(AppMessage),
     {
-        // Create a random PeerId
         let local_key = identity::Keypair::generate_ed25519();
         let local_peer_id = PeerId::from(local_key.public());
         msg_handler(AppMessage::AddLogEntry(format!(
             "Local peer id: {local_peer_id}"
         )));
-
-        // Set up an encrypted DNS-enabled TCP Transport over the Mplex protocol.
         let transport = libp2p::development_transport(local_key.clone()).await?;
-
-        // To content-address message, we can take the hash of message and use it as an ID.
-        let message_id_fn = |message: &GossipsubMessage| {
+        let message_id_fn = |message: &gossipsub::Message| {
             let mut s = DefaultHasher::new();
             message.data.hash(&mut s);
             MessageId::from(s.finish().to_string())
         };
-
-        // Set a custom gossipsub configuration
-        let gossipsub_config = gossipsub::GossipsubConfigBuilder::default()
-            .heartbeat_interval(Duration::from_secs(10)) // This is set to aid debugging by not cluttering the log space
-            .validation_mode(ValidationMode::Strict) // This sets the kind of message validation. The default is Strict (enforce message signing)
-            .message_id_fn(message_id_fn) // content-address messages. No two messages of the same content will be propagated.
+        let gossipsub_config = gossipsub::ConfigBuilder::default()
+            .heartbeat_interval(Duration::from_secs(10))
+            .validation_mode(ValidationMode::Strict)
+            .message_id_fn(message_id_fn)
             .build()
             .expect("Valid config");
-
-        // build a gossipsub network behaviour
         let mut gossipsub =
-            Gossipsub::new(MessageAuthenticity::Signed(local_key), gossipsub_config)
+            gossipsub::Behaviour::new(MessageAuthenticity::Signed(local_key), gossipsub_config)
                 .expect("Correct configuration");
-
-        // Create a Gossipsub topic
         let topic = Topic::new(topic_name);
-
-        // subscribes to our topic
         gossipsub.subscribe(&topic)?;
-
-        // Create a Swarm to manage peers and events
         let mut swarm = {
-            let mdns = mdns::async_io::Behaviour::new(mdns::Config::default())?;
+            let mdns = mdns::async_io::Behaviour::new(mdns::Config::default(), local_peer_id)?;
             let behaviour = MyBehaviour { gossipsub, mdns };
-            Swarm::with_async_std_executor(transport, behaviour, local_peer_id)
+            SwarmBuilder::with_async_std_executor(transport, behaviour, local_peer_id).build()
         };
-
-        // Listen on all interfaces and whatever port the OS assigns
-        let listen_addr = String::from("/ip4/0.0.0.0/tcp/0");
-        swarm.listen_on(listen_addr.parse()?)?;
+        swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
         Ok(Self { swarm, topic })
     }
@@ -199,7 +179,7 @@ impl ConnectionState {
                             app_msg_handler(AppMessage::AddLogEntry(format!("mDNS discover peer has expired: {peer_id}")));
                         }
                     },
-                    SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(GossipsubEvent::Message {
+                    SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
                         propagation_source: peer_id,
                         message_id: id,
                         message,
@@ -211,5 +191,41 @@ impl ConnectionState {
                 }
             }
         }
+    }
+}
+
+pub(crate) fn app_message_handler(
+    msg: AppMessage,
+    state: &mut AppState,
+    connection_msg_sender: UnboundedSender<ConnectionMessage>,
+) {
+    match msg {
+        AppMessage::ReceivedWireMessage(data) => {
+            let m = match serde_json::from_slice(&data) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("failed to deserialize received wire message, Err: {e:?}");
+                    return;
+                }
+            };
+
+            if let Err(e) = state
+                .buffer
+                .handle_wire_message(m, connection_msg_sender.clone())
+            {
+                eprintln!("failed to handle received wire message data, Err {e:?}");
+            };
+        }
+        AppMessage::AddLogEntry(entry) => state.add_log_entry(entry),
+        AppMessage::PeerAdded((_, _)) => {
+            if let Err(e) = connection_msg_sender.unbounded_send(ConnectionMessage::Send(
+                WireMessage::SyncDoc(state.buffer.doc_save()),
+            )) {
+                state.add_log_entry(format!(
+                    "failed to send `RequestMerge` message after a peer was added, Err: {e:?}"
+                ));
+            }
+        }
+        AppMessage::PeerRemoved((_, _)) => {}
     }
 }

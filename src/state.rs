@@ -139,7 +139,7 @@ impl EditableText for SyncedBuffer {
                     new
                 ))
             },
-            |tx| tx.splice_text::<_>(&buffer_id, range.start, range.len(), &new),
+            |tx| tx.splice_text::<_>(&buffer_id, range.start, range.len() as isize, &new),
         ) {
             eprintln!("automerge transact_with() failed, Err: {e:?}");
         };
