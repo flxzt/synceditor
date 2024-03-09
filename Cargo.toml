@@ -1,16 +1,15 @@
 [package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
 name = "synceditor"
 version = "0.1.0"
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 anyhow = "1"
-automerge = "0.5"
 async-std = "1"
+automerge = "0.5"
 druid = "0.8"
 futures = "0.3"
-libp2p = {version = "0.52", features = ["full"]}
+libp2p = { version = "0.52", features = ["full"] }
 serde = "1"
 serde_json = "1"
